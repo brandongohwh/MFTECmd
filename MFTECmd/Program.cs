@@ -30,6 +30,7 @@ using ServiceStack.Text;
 using Usn;
 using Attribute = MFT.Attributes.Attribute;
 using CsvWriter = CsvHelper.CsvWriter;
+using System.Data.SQLite;
 #if !NET6_0
 using Directory = Alphaleonis.Win32.Filesystem.Directory;
 using File = Alphaleonis.Win32.Filesystem.File;
@@ -93,7 +94,16 @@ public class Program
 
             new Option<string>(
                 "--csvf",
-                "File name to save CSV formatted results to. When present, overrides default name\r\n"),
+                "File name to save CSV formatted results to. When present, overrides default name"),
+
+            // Added new option for adding data into SQLite
+            new Option<string>(
+                "--db" ,
+                "Directory to save SQLite formatted results to."),
+
+            new Option<string>(
+                "--dbf",
+                "File name to save SQLite formatted results to. When present, overrides default name"),
 
             new Option<string>(
                 "--body",
@@ -217,7 +227,7 @@ public class Program
         }
     }
     
-    private static void DoWork(string f, string m, string json, string jsonf, string csv, string csvf, string body, string bodyf, string bdl, bool blf, string dd, string @do, string de, bool fls, string ds, string dt, bool sn, bool fl, bool at, bool vss, bool dedupe, bool debug, bool trace)
+    private static void DoWork(string f, string m, string json, string jsonf, string csv, string csvf, string db, string dbf, string body, string bodyf, string bdl, bool blf, string dd, string @do, string de, bool fls, string ds, string dt, bool sn, bool fl, bool at, bool vss, bool dedupe, bool debug, bool trace)
     {
         var levelSwitch = new LoggingLevelSwitch();
 
@@ -320,6 +330,16 @@ public class Program
             }
         }
 
+        if (db.isNullOrEmpty() == false)
+        {
+            if (Directory.Exists(Directory.GetDirectoryRoot(Path.GetFullPath(db))) == false)
+            {
+                Log.Error("Destinationa location not available for {Db}. Verify drive letter and try again. Exiting", db);
+                Console.WriteLine();
+                return;
+            }
+        }
+
         if (body.IsNullOrEmpty() == false)
         {
             if (Directory.Exists(Directory.GetDirectoryRoot(Path.GetFullPath(body))) == false)
@@ -338,14 +358,15 @@ public class Program
                     json.IsNullOrEmpty() &&
                     de.IsNullOrEmpty() &&
                     body.IsNullOrEmpty() &&
-                    dd.IsNullOrEmpty())
+                    dd.IsNullOrEmpty() &&
+                    db.isNullOrEmpty())
                 {
                     var helpBld = new HelpBuilder(LocalizationResources.Instance, Console.WindowWidth);
                     var hc = new HelpContext(helpBld, _rootCommand, Console.Out);
 
                     helpBld.Write(hc);
 
-                    Log.Warning("--csv, --json, --body, --dd, or --de is required. Exiting");
+                    Log.Warning("--csv, --json, --db, --body, --dd, or --de is required. Exiting");
                     return;
                 }
 
@@ -395,13 +416,13 @@ public class Program
                     return;
                 }
 
-                ProcessMft(f, vss, dedupe, body, bdl, bodyf, blf, csv, csvf, json, jsonf, fl, dt, dd, @do, fls, sn, at, de);
+                ProcessMft(f, vss, dedupe, body, bdl, bodyf, blf, csv, csvf, json, jsonf, db, dbf, fl, dt, dd, @do, fls, sn, at, de);
                 break;
             case FileType.LogFile:
                 Log.Warning("$LogFile not supported yet. Exiting");
                 return;
             case FileType.UsnJournal:
-                if (csv.IsNullOrEmpty() && json.IsNullOrEmpty()
+                if (csv.IsNullOrEmpty() && json.IsNullOrEmpty() && db.IsNullOrEmpty()
                    )
                 {
                     var helpBld = new HelpBuilder(LocalizationResources.Instance, Console.WindowWidth);
@@ -409,7 +430,7 @@ public class Program
 
                     helpBld.Write(hc);
 
-                    Log.Warning("--csv or --json is required. Exiting");
+                    Log.Warning("--csv or --json or --db is required. Exiting");
                     return;
                 }
 
@@ -431,10 +452,10 @@ public class Program
                         return;
                     }
 
-                    ProcessMft(m, vss, dedupe, body, bdl, bodyf, blf, csv, csvf, json, jsonf, fl, dt, dd, @do, fls, sn, at, de);
+                    ProcessMft(m, vss, dedupe, body, bdl, bodyf, blf, csv, csvf, json, jsonf, db, dbf, fl, dt, dd, @do, fls, sn, at, de);
                 }
 
-                ProcessJ(f, vss, dedupe, csv, csvf, json, jsonf, dt);
+                ProcessJ(f, vss, dedupe, csv, csvf, json, jsonf, db, dbf, dt);
                 break;
             case FileType.Boot:
                 ProcessBoot(f, vss, dedupe, csv, csvf);
@@ -660,8 +681,9 @@ public class Program
         }
     }
 
-    private static void ProcessJ(string f, bool vss, bool dedupe, string csv, string csvf, string json, string jsonf, string dt)
+    private static void ProcessJ(string f, bool vss, bool dedupe, string csv, string csvf, string json, string jsonf, string db, string dbf, string dt)
     {
+        // DB not implemented
         var sw = new Stopwatch();
         sw.Start();
         Usn.Usn j;
@@ -1313,7 +1335,7 @@ public class Program
 
     
     
-    private static void ProcessMft(string file, bool vss, bool dedupe, string body, string bdl, string bodyf, bool blf, string csv, string csvf, string json, string jsonf, bool fl, string dt, string dd, string @do, bool fls, bool includeShort, bool alltimestamp, string de)
+    private static void ProcessMft(string file, bool vss, bool dedupe, string body, string bdl, string bodyf, bool blf, string csv, string csvf, string json, string jsonf, string db, string dbf, bool fl, string dt, string dd, string @do, bool fls, bool includeShort, bool alltimestamp, string de)
     {
         var mftFiles = new Dictionary<string, Mft>();
 
@@ -1517,6 +1539,167 @@ public class Program
             if (json.IsNullOrEmpty() == false)
             {
                 _mftOutRecords = new List<MFTRecordOut>();
+            }
+
+            if (db.IsNullOrEmpty() == false)
+            {
+                //Open DB
+                //Currently editing
+                if (Directory.Exists(db) == false)
+                {
+                    Log.Information(
+                        "Path to '{db}' doesn't exist. Creating...", db);
+                    try
+                    {
+                        Directory.CreateDirectory(db);
+                    }
+                    catch (Exception e)
+                    {
+                        Log.Fatal(e,
+                            "Unable to create directory '{db}'. Does a file with the same name exist? Exiting", db);
+                        return;
+                    }
+                }
+
+                string outName;
+                string outFile;
+
+                if (mftFile.Key.StartsWith("\\\\.\\"))
+                {
+                    var vssNumber = Helper.GetVssNumberFromPath(mftFile.Key);
+                    var vssTime = Helper.GetVssCreationDate(vssNumber);
+
+                    outName =
+                        $"{dateTimeOffset:yyyyMMddHHmmss}_VSS{vssNumber}_{vssTime:yyyyMMddHHmmss_fffffff}_MFTECmd_$MFT_Output.db";
+
+                    if (dbf.IsNullOrEmpty() == false)
+                    {
+                        outName =
+                            $"VSS{vssNumber}_{vssTime:yyyyMMddHHmmss}_{Path.GetFileName(dbf)}";
+                    }
+                }
+                else
+                {
+                    //normal file
+                    outName = $"{dateTimeOffset:yyyyMMddHHmmss}_MFTECmd_$MFT_Output.csv";
+
+                    if (dbf.IsNullOrEmpty() == false)
+                    {
+                        outName = Path.GetFileName(dbf);
+                    }
+                }
+
+                outFile = Path.Combine(db, outName);
+
+                Log.Information("\tDB output will be saved to '{OutFile}'", outFile);
+
+                if (fl)
+                {
+                    var outFileFl = outFile.Replace("$MFT_Output", "$MFT_Output_FileListing");
+
+                    if (dbf.IsNullOrEmpty() == false)
+                    {
+                        outFileFl = Path.Combine(Path.GetDirectoryName(outFileFl), $"{Path.GetFileNameWithoutExtension(outFileFl)}_FileListing{Path.GetExtension(outFileFl)}");
+                    }
+
+                    Log.Information("\tDB file listing output will be saved to '{OutFileFl}'", outFileFl);
+
+                    //Amend from here
+                    swFileList = new StreamWriter(outFileFl, false, Encoding.UTF8);
+                    _fileListWriter = new CsvWriter(swFileList, CultureInfo.InvariantCulture);
+
+                    var foo = _fileListWriter.Context.AutoMap<FileListEntry>();
+
+                    _fileListWriter.Context.RegisterClassMap(foo);
+                    foo.Map(t => t.Created0x10).Convert(t =>
+                        $"{t.Value.Created0x10?.ToString(dt)}");
+                    foo.Map(t => t.LastModified0x10).Convert(t =>
+                        $"{t.Value.LastModified0x10?.ToString(dt)}");
+
+                    _fileListWriter.WriteHeader<FileListEntry>();
+                    _fileListWriter.NextRecord();
+                }
+
+                try
+                {
+                    swCsv = new StreamWriter(outFile, false, Encoding.UTF8, 4096 * 4);
+
+                    _csvWriter = new CsvWriter(swCsv, CultureInfo.InvariantCulture);
+
+                    var foo = _csvWriter.Context.AutoMap<MFTRecordOut>();
+
+                    foo.Map(t => t.EntryNumber).Index(0);
+                    foo.Map(t => t.SequenceNumber).Index(1);
+                    foo.Map(t => t.InUse).Index(2);
+                    foo.Map(t => t.ParentEntryNumber).Index(3);
+                    foo.Map(t => t.ParentSequenceNumber).Index(4);
+                    foo.Map(t => t.ParentPath).Index(5);
+                    foo.Map(t => t.FileName).Index(6);
+                    foo.Map(t => t.Extension).Index(7);
+                    foo.Map(t => t.FileSize).Index(8);
+                    foo.Map(t => t.ReferenceCount).Index(9);
+                    foo.Map(t => t.ReparseTarget).Index(10);
+
+                    foo.Map(t => t.IsDirectory).Index(11);
+                    foo.Map(t => t.HasAds).Index(12);
+                    foo.Map(t => t.IsAds).Index(13);
+                    foo.Map(t => t.Timestomped).Index(14).Name("SI<FN");
+                    foo.Map(t => t.uSecZeros).Index(15);
+                    foo.Map(t => t.Copied).Index(16);
+                    foo.Map(t => t.SiFlags).Convert(t => t.Value.SiFlags.ToString().Replace(", ", "|"))
+                        .Index(17);
+                    foo.Map(t => t.NameType).Index(18);
+
+                    foo.Map(t => t.Created0x10).Convert(t =>
+                        $"{t.Value.Created0x10?.ToString(dt)}").Index(19);
+                    foo.Map(t => t.Created0x30).Convert(t =>
+                        $"{t.Value.Created0x30?.ToString(dt)}").Index(20);
+
+                    foo.Map(t => t.LastModified0x10).Convert(t =>
+                            $"{t.Value.LastModified0x10?.ToString(dt)}")
+                        .Index(21);
+                    foo.Map(t => t.LastModified0x30).Convert(t =>
+                            $"{t.Value.LastModified0x30?.ToString(dt)}")
+                        .Index(22);
+
+                    foo.Map(t => t.LastRecordChange0x10).Convert(t =>
+                            $"{t.Value.LastRecordChange0x10?.ToString(dt)}")
+                        .Index(23);
+                    foo.Map(t => t.LastRecordChange0x30).Convert(t =>
+                            $"{t.Value.LastRecordChange0x30?.ToString(dt)}")
+                        .Index(24);
+
+                    foo.Map(t => t.LastAccess0x10).Convert(t =>
+                            $"{t.Value.LastAccess0x10?.ToString(dt)}")
+                        .Index(25);
+
+                    foo.Map(t => t.LastAccess0x30).Convert(t =>
+                            $"{t.Value.LastAccess0x30?.ToString(dt)}")
+                        .Index(26);
+
+                    foo.Map(t => t.UpdateSequenceNumber).Index(27);
+                    foo.Map(t => t.LogfileSequenceNumber).Index(28);
+                    foo.Map(t => t.SecurityId).Index(29);
+
+                    foo.Map(t => t.ObjectIdFileDroid).Index(30);
+                    foo.Map(t => t.LoggedUtilStream).Index(31);
+                    foo.Map(t => t.ZoneIdContents).Index(32);
+
+                    foo.Map(t => t.FnAttributeId).Ignore();
+                    foo.Map(t => t.OtherAttributeId).Ignore();
+
+                    _csvWriter.Context.RegisterClassMap(foo);
+
+                    _csvWriter.WriteHeader<MFTRecordOut>();
+                    _csvWriter.NextRecord();
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine();
+                    Log.Error(e,
+                        "Error setting up CSV export. Please report to saericzimmerman@gmail.com. Error: {Message}", e.Message);
+                    _csvWriter = null;
+                }
             }
 
             if (csv.IsNullOrEmpty() == false ||
